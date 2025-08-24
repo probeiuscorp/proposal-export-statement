@@ -1,50 +1,87 @@
-# template-for-proposals
+# Export statements
 
-A repository template for ECMAScript proposals.
+## Status
 
-## Before creating a proposal
+Stage: 0
 
-Please ensure the following:
-  1. You have read the [process document](https://tc39.github.io/process-document/)
-  1. You have reviewed the [existing proposals](https://github.com/tc39/proposals/)
-  1. You are aware that your proposal requires being a member of TC39, or locating a TC39 delegate to “champion” your proposal
+## Motivation
 
-## Create your proposal repo
+Consider having a big function.
 
-Follow these steps:
-  1. Click the green [“use this template”](https://github.com/tc39/template-for-proposals/generate) button in the repo header. (Note: Do not fork this repo in GitHub's web interface, as that will later prevent transfer into the TC39 organization)
-  1. Update ecmarkup and the biblio to the latest version: `npm install --save-dev ecmarkup@latest && npm install --save-dev --save-exact @tc39/ecma262-biblio@latest`.
-  1. Go to your repo settings page:
-      1. Under “General”, under “Features”, ensure “Issues” is checked, and disable “Wiki”, and “Projects” (unless you intend to use Projects)
-      1. Under “Pull Requests”, check “Always suggest updating pull request branches” and “automatically delete head branches”
-      1. Under the “Pages” section on the left sidebar, and set the source to “deploy from a branch”, select “gh-pages” in the branch dropdown, and then ensure that “Enforce HTTPS” is checked.
-      1. Under the “Actions” section on the left sidebar, under “General”, select “Read and write permissions” under “Workflow permissions” and click “Save”
-  1. [“How to write a good explainer”][explainer] explains how to make a good first impression.
+You could break up your function, so your definitions and return statement are closer, but then your definitions can't reference each other. This pain is **particularly noticable when most of the definitions in the function are themselves functions**.
 
-      > Each TC39 proposal should have a `README.md` file which explains the purpose
-      > of the proposal and its shape at a high level.
-      >
-      > ...
-      >
-      > The rest of this page can be used as a template ...
+## Description
 
-      Your explainer can point readers to the `index.html` generated from `spec.emu`
-      via markdown like
+Permit export modifiers on variable declarations within the blocks of function bodies. If the function exits without an explicit return, it will return a new object with properties for every exported identifier, so this snippet:
 
-      ```markdown
-      You can browse the [ecmarkup output](https://ACCOUNT.github.io/PROJECT/)
-      or browse the [source](https://github.com/ACCOUNT/PROJECT/blob/HEAD/spec.emu).
-      ```
+```js
+export function makeBigThing(initialCount) {
+  if (initialCount < 0) {
+    return;
+  }
 
-      where *ACCOUNT* and *PROJECT* are the first two path elements in your project's Github URL.
-      For example, for github.com/**tc39**/**template-for-proposals**, *ACCOUNT* is “tc39”
-      and *PROJECT* is “template-for-proposals”.
+  export const [bMultiplier, setMultiplier] = Behavior(initialCount);
+  const [eIncrement, dispatchIncrement] = Revent();
+  export { dispatchIncrement };
+  export const bSum = eIncrement
+    .reduce((acc, n) => acc + n, 0)
+    .liftA2(bMultiplier, (sum, count) => sum + count);
+}
+```
 
+is exactly equivalent to:
 
-## Maintain your proposal repo
+```js
+export function makeBigThing(initialCount) {
+  if (initialCount <= 0) {
+    return;
+  }
 
-  1. Make your changes to `spec.emu` (ecmarkup uses HTML syntax, but is not HTML, so I strongly suggest not naming it “.html”)
-  1. Any commit that makes meaningful changes to the spec, should run `npm run build` to verify that the build will succeed and the output looks as expected.
-  1. Whenever you update `ecmarkup`, run `npm run build` to verify that the build will succeed and the output looks as expected.
+  const [bMultiplier, setMultiplier] = Behavior(initialCount);
+  const [eIncrement, dispatchIncrement] = Revent();
+  const bSum = eIncrement
+    .reduce((acc, n) => acc + n, 0)
+    .liftA2(bMultiplier, (sum, mul) => sum * mul);
 
-  [explainer]: https://github.com/tc39/how-we-work/blob/HEAD/explainer.md
+  return {
+    bMultiplier,
+    setMultiplier,
+    dispatchIncrement,
+    bSum,
+  };
+}
+```
+
+Exports in async and generator functions are what would be expected.
+
+- **Locality**
+
+Having a big object return at the end of the function is the best existing alternative in my mind, however the loss of locality is very painful. Your diffs are split up and it's significantly harder to understand the public interface of any particular section.
+
+- **Symmetry with module scope**
+
+If you have a lot of code at the module scope, but then need to lift it to a function, supporting exports within functions would be good for symmetry. Unexpectedly needing to add a non-static input would require a less drastic change.
+
+One weakness is that `export ... from` would still be bad syntax. While a variant of import declarations, code may vary reasonably use `export const bMessagesLeft = bSum` and `export { bSum as bMessagesLeft } from '...'.` interchangeably. Authors would still need to rewrite these cases.
+
+- **Works well with destructing**
+
+Any existing userland solution cannot work with destructuring anywhere near as well as expanding export modifiers would.
+
+- **Easy for type inference**
+
+## Comparison
+
+### Status quo
+
+I see two viable existing approaches:
+
+- splitting up your function
+- creating sub-objects that can be spreaded over kept as-is in the return
+
+### Object mutation
+
+Building the return by mutating an object does work well for locality, but doesn't work with type inference or type safety at all (when considering TypeScript). Moreover, either the names need to be redeclared twice (o.bSum = bSum)
+- Doesn't work well with destructuring
+- (Considering TypeScript) doesn't work with type inference or type safety at all
+- Either the names need to be redeclared twice (o.bSum = bSum) or the values are only referred to from the built-up object, (o.bSum = eIncrement.reduce(...)), leaking irrelevant knowledge into consumers and increasing diff churn
